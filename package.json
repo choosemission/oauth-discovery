@@ -1,0 +1,19 @@
+{
+  "name": "mcp-auth-discovery",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OAuth discovery front for an MCP server behind an Affinidi Agent Gateway route.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/node.ts",
+    "test": "node --test test/*.test.ts",
+    "typecheck": "tsc"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.2"
+  }
+}
