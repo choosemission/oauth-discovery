@@ -3,13 +3,13 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { after, describe, it } from 'node:test';
 
-import { configFromEnv, createFront, decodeClaims, precheck, resourceMetadataUrl } from '../src/front.ts';
+import { configFromEnv, createProxy, decodeClaims, precheck, resourceMetadataUrl } from '../src/proxy.ts';
 import { listen } from '../src/node.ts';
 
 const ISSUER = 'https://idp.example.com/realms/lab';
 const UPSTREAM = 'https://train-soap.agentgateway.affinidi.io/routes/catalog/discover';
 const ENV = {
-    PUBLIC_URL: 'https://front.example.com/mcp',
+    PUBLIC_URL: 'https://proxy.example.com/mcp',
     UPSTREAM_URL: UPSTREAM,
     OIDC_ISSUER: ISSUER,
     JWT_AUDIENCE: 'https://resource.example.com/mcp',
@@ -17,7 +17,7 @@ const ENV = {
 };
 const CONFIG = configFromEnv(ENV);
 
-/** Unsigned, which is the point: the front never looks at the signature. */
+/** Unsigned, which is the point: the proxy never looks at the signature. */
 function token(claims: Record<string, unknown> = {}): string {
     const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
     const exp = Math.floor(Date.now() / 1000) + 300;
@@ -28,8 +28,8 @@ const silent = () => {};
 const reply = (body = '{"jsonrpc":"2.0","id":7,"result":{}}', init: ResponseInit = { headers: { 'content-type': 'application/json' } }) =>
     async () => new Response(body, init);
 
-function front(fetchImpl: typeof fetch, config = CONFIG) {
-    const handle = createFront(config, { log: silent, fetchImpl });
+function proxy(fetchImpl: typeof fetch, config = CONFIG) {
+    const handle = createProxy(config, { log: silent, fetchImpl });
     const call = (bearer: string | null = token(), body: unknown = { jsonrpc: '2.0', id: 7, method: 'tools/list' }) =>
         handle(
             new Request(config.publicUrl, {
@@ -54,8 +54,8 @@ describe('configuration', () => {
         assert.ok(configFromEnv({ ...ENV, UPSTREAM_URL: 'http://localhost:9999/routes/x' }));
     });
 
-    it('refuses an upstream that points back at the front', () => {
-        assert.throws(() => configFromEnv({ ...ENV, UPSTREAM_URL: 'https://front.example.com/mcp/' }), /points back/);
+    it('refuses an upstream that points back at the proxy', () => {
+        assert.throws(() => configFromEnv({ ...ENV, UPSTREAM_URL: 'https://proxy.example.com/mcp/' }), /points back/);
     });
 
     it('keeps the issuer exactly as configured, trailing slash included', () => {
@@ -85,39 +85,39 @@ describe('the precheck', () => {
 
 describe('discovery', () => {
     it('puts the metadata path after the well-known prefix', () => {
-        assert.equal(resourceMetadataUrl(CONFIG.publicUrl), 'https://front.example.com/.well-known/oauth-protected-resource/mcp');
+        assert.equal(resourceMetadataUrl(CONFIG.publicUrl), 'https://proxy.example.com/.well-known/oauth-protected-resource/mcp');
     });
 
     it('publishes RFC 9728 metadata naming the IdP', async () => {
-        const { handle } = front(reply());
+        const { handle } = proxy(reply());
         for (const path of ['/.well-known/oauth-protected-resource/mcp', '/.well-known/oauth-protected-resource']) {
-            const response = await handle(new Request(`https://front.example.com${path}`));
+            const response = await handle(new Request(`https://proxy.example.com${path}`));
             const body = (await response.json()) as Record<string, unknown>;
-            assert.equal(body.resource, 'https://front.example.com/mcp');
+            assert.equal(body.resource, 'https://proxy.example.com/mcp');
             assert.deepEqual(body.authorization_servers, [ISSUER]);
             assert.deepEqual(body.scopes_supported, ['openid', 'email', 'offline_access']);
         }
     });
 
     it('challenges a request with no token, pointing at the metadata', async () => {
-        const response = await front(reply()).call(null);
+        const response = await proxy(reply()).call(null);
         assert.equal(response.status, 401);
         assert.equal(
             response.headers.get('www-authenticate'),
-            'Bearer resource_metadata="https://front.example.com/.well-known/oauth-protected-resource/mcp"'
+            'Bearer resource_metadata="https://proxy.example.com/.well-known/oauth-protected-resource/mcp"'
         );
     });
 
     it('challenges an expired token without calling the Gateway', async () => {
         let called = false;
-        const response = await front(async () => ((called = true), new Response())).call(token({ exp: 1 }));
+        const response = await proxy(async () => ((called = true), new Response())).call(token({ exp: 1 }));
         assert.equal(response.status, 401);
         assert.match(response.headers.get('www-authenticate') ?? '', /error="invalid_token".*resource_metadata=/);
         assert.equal(called, false);
     });
 
     it('declines GET and DELETE on the resource, as Streamable HTTP allows', async () => {
-        const { handle } = front(reply());
+        const { handle } = proxy(reply());
         assert.equal((await handle(new Request(CONFIG.publicUrl))).status, 405);
     });
 });
@@ -125,7 +125,7 @@ describe('discovery', () => {
 describe('forwarding', () => {
     it('sends the token, a JSON-only Accept and the MCP headers to the Gateway route', async () => {
         let seen: { url: string; headers: Record<string, string>; body: string } | undefined;
-        const { handle } = front(async (url, init) => {
+        const { handle } = proxy(async (url, init) => {
             seen = { url: String(url), headers: init?.headers as Record<string, string>, body: String(init?.body) };
             return reply()();
         });
@@ -149,12 +149,12 @@ describe('forwarding', () => {
         let headers: Record<string, string> | undefined;
         const config = configFromEnv({ ...ENV, FORWARD_TOKEN_HEADER: 'X-Lab-Participant-Token' });
         const bearer = token();
-        await front(async (_url, init) => ((headers = init?.headers as Record<string, string>), reply()()), config).call(bearer);
+        await proxy(async (_url, init) => ((headers = init?.headers as Record<string, string>), reply()()), config).call(bearer);
         assert.equal(headers?.['x-lab-participant-token'], bearer);
     });
 
     it('relays status, body and session id', async () => {
-        const response = await front(
+        const response = await proxy(
             reply('{"jsonrpc":"2.0","id":7,"result":{"tools":[]}}', { headers: { 'content-type': 'application/json', 'mcp-session-id': 's-2' } })
         ).call();
         assert.equal(response.status, 200);
@@ -163,7 +163,7 @@ describe('forwarding', () => {
     });
 
     it('relays a server-sent event stream', async () => {
-        const response = await front(reply('data: {}\n\n', { headers: { 'content-type': 'text/event-stream' } })).call();
+        const response = await proxy(reply('data: {}\n\n', { headers: { 'content-type': 'text/event-stream' } })).call();
         assert.match(response.headers.get('content-type') ?? '', /event-stream/);
         assert.match(await response.text(), /^data: /);
     });
@@ -171,7 +171,7 @@ describe('forwarding', () => {
     it('turns a Gateway 401 into a terminal 502, never relaying its challenge', async () => {
         // Relaying it would restart a sign-in that already worked, chasing a
         // challenge that points at documents serving HTML.
-        const response = await front(
+        const response = await proxy(
             reply('{"detail":"unauthorized"}', { status: 401, headers: { 'www-authenticate': 'Bearer resource_metadata="/x"' } })
         ).call();
         assert.equal(response.status, 502);
@@ -182,11 +182,11 @@ describe('forwarding', () => {
     });
 
     it('turns a trust-policy 403 into a 502', async () => {
-        assert.equal((await front(reply('denied', { status: 403 })).call()).status, 502);
+        assert.equal((await proxy(reply('denied', { status: 403 })).call()).status, 502);
     });
 
     it('answers 502 when the Gateway is unreachable, keeping the JSON-RPC id', async () => {
-        const response = await front(async () => {
+        const response = await proxy(async () => {
             throw new TypeError('fetch failed');
         }).call();
         assert.equal(response.status, 502);
@@ -194,7 +194,7 @@ describe('forwarding', () => {
     });
 
     it('refuses an oversized body', async () => {
-        assert.equal((await front(reply()).call(token(), { pad: 'x'.repeat(1_100_000) })).status, 413);
+        assert.equal((await proxy(reply()).call(token(), { pad: 'x'.repeat(1_100_000) })).status, 413);
     });
 });
 
@@ -213,7 +213,7 @@ describe('over real HTTP, against a stub Gateway', () => {
         const upstream = await start(gateway);
 
         const config = configFromEnv({ ...ENV, PUBLIC_URL: 'http://localhost/mcp', UPSTREAM_URL: `${upstream}/route` });
-        const base = await start(listen(createFront(config, { log: silent }), 0, silent));
+        const base = await start(listen(createProxy(config, { log: silent }), 0, silent));
 
         const challenge = await fetch(`${base}/mcp`, { method: 'POST', body: '{}' });
         assert.equal(challenge.status, 401);

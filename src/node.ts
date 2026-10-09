@@ -1,8 +1,8 @@
 /**
- * Run the front under Node: `node --env-file-if-exists=.env src/node.ts`.
+ * Run the proxy under Node: `node --env-file-if-exists=.env src/node.ts`.
  *
  * Node's http server speaks IncomingMessage, not `Request`, so this adapts one
- * to the other and back. Everything that matters lives in `front.ts`.
+ * to the other and back. Everything that matters lives in `proxy.ts`.
  */
 import { createServer, type Server } from 'node:http';
 import { Readable } from 'node:stream';
@@ -10,7 +10,7 @@ import { pipeline } from 'node:stream/promises';
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import { fileURLToPath } from 'node:url';
 
-import { configFromEnv, consoleLog, createFront, type Log } from './front.ts';
+import { configFromEnv, consoleLog, createProxy, type Log } from './proxy.ts';
 
 export function listen(handle: (request: Request) => Promise<Response>, port: number, log: Log = consoleLog): Server {
     return createServer(async (req, res) => {
@@ -18,7 +18,7 @@ export function listen(handle: (request: Request) => Promise<Response>, port: nu
             const headers = new Headers();
             for (let i = 0; i < req.rawHeaders.length; i += 2) headers.append(req.rawHeaders[i]!, req.rawHeaders[i + 1]!);
             const hasBody = req.method !== 'GET' && req.method !== 'HEAD';
-            // The host is irrelevant: the front routes on path alone, and its
+            // The host is irrelevant: the proxy routes on path alone, and its
             // public identity comes from PUBLIC_URL, never from a request header.
             const request = new Request(new URL(req.url ?? '/', 'http://localhost'), {
                 method: req.method,
@@ -43,8 +43,8 @@ export function listen(handle: (request: Request) => Promise<Response>, port: nu
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const config = configFromEnv(process.env);
     const port = Number(process.env.PORT ?? 8080);
-    listen(createFront(config), port);
-    consoleLog('info', 'front listening', {
+    listen(createProxy(config), port);
+    consoleLog('info', 'proxy listening', {
         port,
         resource: config.publicUrl.href,
         upstream: config.upstreamUrl.href,

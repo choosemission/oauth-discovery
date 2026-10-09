@@ -1,12 +1,12 @@
 /**
- * An OAuth discovery front for an Agent Gateway route.
+ * An OAuth discovery proxy for an Agent Gateway route.
  *
- * An MCP client pointed straight at an Affinidi Agent Gateway access point
- * cannot sign in: the Gateway answers with a spec-shaped 401, but the discovery
+ * A client (an MCP client, for one) pointed straight at an Affinidi Agent
+ * Gateway access point cannot sign in: the Gateway answers with a spec-shaped 401, but the discovery
  * documents that challenge points at serve the dashboard's HTML, so the client
  * follows the pointer, receives a web page, and stops.
  *
- * This front stands in for that missing half. It owns a public URL, publishes
+ * This proxy stands in for that missing half. It owns a public URL, publishes
  * RFC 9728 protected-resource metadata naming your IdP, answers a real 401
  * challenge, and forwards each request carrying a bearer token to the Gateway
  * route. The Gateway does everything else: it verifies the token, applies its
@@ -58,18 +58,18 @@ export function configFromEnv(env: Env) {
     const issuer = env.OIDC_ISSUER!.trim();
 
     // The arrangement can be circular by design (out to the Gateway and back to
-    // a resource on the same host), so a route aimed at this front itself loops
+    // a resource on the same host), so a route aimed at this proxy itself loops
     // until something runs out of sockets. Cheaper to refuse to start.
     const strip = (url: URL) => url.origin + url.pathname.replace(/\/$/, '');
     if (strip(upstreamUrl) === strip(publicUrl)) {
-        throw new Error(`UPSTREAM_URL points back at this front (${publicUrl.href}). It must name the Agent Gateway route.`);
+        throw new Error(`UPSTREAM_URL points back at this proxy (${publicUrl.href}). It must name the Agent Gateway route.`);
     }
 
     const upstreamTimeoutMs = Number(env.UPSTREAM_TIMEOUT_MS ?? 30_000);
     if (!(upstreamTimeoutMs > 0)) throw new Error(`UPSTREAM_TIMEOUT_MS must be a positive number: ${env.UPSTREAM_TIMEOUT_MS}`);
 
     return {
-        /** This front's public URL. It is the OAuth resource identifier, and its path is where MCP requests arrive. */
+        /** This proxy's public URL. It is the OAuth resource identifier, and its path is where MCP requests arrive. */
         publicUrl,
         /** The Agent Gateway access-point route every admitted request is forwarded to. */
         upstreamUrl,
@@ -94,7 +94,7 @@ export type Config = ReturnType<typeof configFromEnv>;
 
 /**
  * Where the RFC 9728 document lives: the well-known prefix inserted before the
- * resource's path. Also served at the bare prefix, since this front owns its
+ * resource's path. Also served at the bare prefix, since this proxy owns its
  * host and some clients only look there.
  */
 export function resourceMetadataUrl(publicUrl: URL): string {
@@ -152,13 +152,13 @@ async function readCapped(request: Request): Promise<string | undefined> {
     return new Blob(chunks).text();
 }
 
-export interface FrontOptions {
+export interface ProxyOptions {
     log?: Log;
     /** Injected in tests. */
     fetchImpl?: typeof fetch;
 }
 
-export function createFront(config: Config, { log = consoleLog, fetchImpl = fetch }: FrontOptions = {}) {
+export function createProxy(config: Config, { log = consoleLog, fetchImpl = fetch }: ProxyOptions = {}) {
     const metadataUrl = resourceMetadataUrl(config.publicUrl);
     const metadataPaths = new Set([new URL(metadataUrl).pathname, '/.well-known/oauth-protected-resource']);
     const protectedResource = {
@@ -243,7 +243,7 @@ export function createFront(config: Config, { log = consoleLog, fetchImpl = fetc
         // terminal and put the detail where an operator will find it.
         if (upstream.status === 401 || upstream.status === 403) {
             const detail = await upstream.text().catch(() => '');
-            log('error', 'agent gateway refused a request this front admitted', {
+            log('error', 'agent gateway refused a request this proxy admitted', {
                 status: upstream.status,
                 detail: detail.slice(0, 500),
                 sub: claims?.sub,

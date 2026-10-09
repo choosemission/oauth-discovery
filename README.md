@@ -1,56 +1,86 @@
-# mcp-auth-discovery
+# OAuth Discovery
 
-An OAuth discovery front for an MCP server behind an Affinidi Agent Gateway route.
+An OAuth discovery proxy for Agent Surfaces on an
+[Affinidi Agent Gateway](https://www.affinidi.com/). It lets an agent client
+sign in to a service whose access point requires a JWT, using nothing but a URL.
 
-**This is a proxy, not only a discovery document.** Every MCP request goes
-through it to the Gateway.
+## What this repo is for
+
+You have a service behind an Agent Surface, and the access point requires a
+bearer token from your IdP. A client should be able to connect with just a URL,
+find out where to sign in, get a token, and call the service. Today it can't,
+because the Gateway's OAuth discovery is broken (see [Why](#why)).
+
+This repo is a small proxy you run in front of that access point:
+
+1. It owns a public URL and publishes
+   [RFC 9728](https://www.rfc-editor.org/rfc/rfc9728) protected-resource
+   metadata naming your IdP.
+2. It answers unauthenticated requests with a `401` challenge that points at
+   that metadata, so the client knows where to sign in.
+3. It forwards every request that carries a token to the access point, which
+   verifies the token, applies policy and calls your service.
+
+**What works today.** MCP servers (Streamable HTTP) are supported and tested
+end to end. Discovery itself is plain HTTP OAuth, and the forwarding handles
+any JSON-RPC-over-`POST` protocol, so A2A's JSON-RPC binding is close. A2A
+clients also read sign-in details from the agent card at
+`/.well-known/agent-card.json`, though, and this proxy does not serve or pass
+that through yet.
+
+**What it is not.** It is not an authorization server or a token verifier:
+your IdP issues tokens, and the access point verifies them (see
+[below](#the-access-point-must-verify-the-token)). It is not only a discovery
+document either: every request goes through it.
 
 **It is a workaround.** It is meant to be used only until an Agent Surface
 supports [Authorization Server Discovery](https://modelcontextprotocol.io/specification/draft/basic/authorization/authorization-server-discovery)
-from the MCP authorization spec: a 401 challenge whose `resource_metadata`
-points at RFC 9728 metadata naming the authorization server. Once the Gateway
-serves that itself, point clients at the access point directly and retire this.
+itself: a `401` challenge whose `resource_metadata` points at RFC 9728 metadata
+naming the authorization server. Once the Gateway serves that, point clients at
+the access point directly and retire this.
+
+Not affiliated with Affinidi.
 
 ## Why
 
-Point an MCP client straight at an Agent Gateway access point and sign-in
-fails. The Gateway answers with a correct `401`, but the discovery documents
+Point a client (an MCP client, for example) straight at an Agent Gateway
+access point and sign-in fails. The Gateway answers with a correct `401`, but the discovery documents
 that challenge points at return the dashboard's HTML. The client follows the
 pointer, gets a web page, and stops.
 
-This front owns its own URL and does the part the Gateway can't do yet:
+This proxy owns its own URL and does the part the Gateway can't do yet:
 
 ```
-MCP client
-   │  POST https://front.example.com/mcp
+agent client
+   │  POST https://proxy.example.com/mcp
    │  401 → RFC 9728 metadata → sign in at your IdP → Bearer <token>
    ▼
-this front     publishes metadata, answers the 401 challenge, forwards with the token
+this proxy     publishes metadata, answers the 401 challenge, forwards with the token
    │  Authorization: Bearer <the same token>
    ▼
 Agent Gateway  verifies the token, applies trust policy, injects credentials, audits
    │
    ▼
-your MCP server
+your service (an MCP server, say)
 ```
 
 ## The access point must verify the token
 
-**The front does not verify tokens.** It decodes the token without checking the
+**The proxy does not verify tokens.** It decodes the token without checking the
 signature and confirms that the issuer, expiry and (optionally) audience look
 right. Anyone can forge a token that passes this check. All it does is decide
 whether the client should be asked to sign in again (`401`) or whether the
 Gateway is misconfigured (a terminal `502`, so the client doesn't loop through
 sign-in forever).
 
-Real verification is the Gateway's job. Before you put this front in front of
+Real verification is the Gateway's job. Before you put this proxy in front of
 your access point, configure on the access point:
 
 - a **JWT verification strategy** that trusts your IdP's issuer; and
 - **caller identity extraction**. Without it, the Gateway verifies the token
   but has no claim to attribute the call to, and returns `200` with an empty body.
 
-If the access point accepts unauthenticated calls, this front is an open door.
+If the access point accepts unauthenticated calls, this proxy is an open door.
 
 ## Run it
 
@@ -70,7 +100,7 @@ See [`.env.example`](./.env.example) for every variable. The ones that matter:
 
 | Variable | What it is |
 | --- | --- |
-| `PUBLIC_URL` | This front's public URL: the OAuth resource identifier |
+| `PUBLIC_URL` | This proxy's public URL: the OAuth resource identifier |
 | `UPSTREAM_URL` | The Agent Gateway route to forward to |
 | `OIDC_ISSUER` | Your IdP, compared to `iss` exactly |
 | `JWT_AUDIENCE` | If set, `aud` must contain it |
@@ -105,5 +135,5 @@ npm test
 npm run typecheck
 ```
 
-`src/front.ts` is a web-standard `fetch(Request) → Response` handler, and
+`src/proxy.ts` is a web-standard `fetch(Request) → Response` handler, and
 `src/node.ts` adapts it to Node's http server.
