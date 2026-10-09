@@ -8,8 +8,9 @@ sign in to a service whose access point requires a JWT, using nothing but a URL.
 
 You have a service behind an Agent Surface, and the access point requires a
 bearer token from your IdP. A client should be able to connect with just a URL,
-find out where to sign in, get a token, and call the service. Today it can't,
-because the Gateway's OAuth discovery is broken (see [Why](#why)).
+find out where to sign in, get a token, and call the service. That relies on
+the surface publishing OAuth discovery metadata, which Agent Surfaces don't
+support yet (see [Why](#why)).
 
 This repo is a small proxy you run in front of that access point:
 
@@ -43,12 +44,14 @@ Not affiliated with Affinidi.
 
 ## Why
 
-Point a client (an MCP client, for example) straight at an Agent Gateway
-access point and sign-in fails. The Gateway answers with a correct `401`, but the discovery documents
-that challenge points at return the dashboard's HTML. The client follows the
-pointer, gets a web page, and stops.
+To sign a user in on its own, a client (an MCP client, for example) needs the
+service to tell it where to go: a `401` challenge pointing at RFC 9728
+protected-resource metadata that names the IdP. Agent Surfaces don't publish
+that metadata yet, so a client pointed straight at an access point has no
+way to discover where to sign in.
 
-This proxy owns its own URL and does the part the Gateway can't do yet:
+This proxy owns its own URL and provides that discovery step until the surface
+supports it:
 
 ```
 agent client
@@ -123,8 +126,9 @@ Set `JWT_AUDIENCE` to what the mapper emits, which is usually not `PUBLIC_URL`.
 - Forwards the body unchanged, with `Authorization`, the MCP headers
   (`mcp-protocol-version`, `mcp-session-id`, `last-event-id`) and
   `Accept: $UPSTREAM_ACCEPT`. Nothing else from the client is passed on.
-- Never relays the Gateway's `WWW-Authenticate`. A Gateway `401` or `403` on a
-  token that passed the check becomes a `502` with a JSON-RPC error.
+- Answers with its own challenge rather than the access point's. A `401` or
+  `403` from the access point on a token that passed the check becomes a `502`
+  with a JSON-RPC error, so the client doesn't restart sign-in.
 - Streams the response back.
 
 ## Develop

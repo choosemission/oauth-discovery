@@ -1,12 +1,11 @@
 /**
  * An OAuth discovery proxy for an Agent Gateway route.
  *
- * A client (an MCP client, for one) pointed straight at an Affinidi Agent
- * Gateway access point cannot sign in: the Gateway answers with a spec-shaped 401, but the discovery
- * documents that challenge points at serve the dashboard's HTML, so the client
- * follows the pointer, receives a web page, and stops.
+ * To sign a user in on its own, a client (an MCP client, for one) needs the
+ * service to point it at RFC 9728 protected-resource metadata naming the IdP.
+ * Agent Surfaces don't publish that metadata yet.
  *
- * This proxy stands in for that missing half. It owns a public URL, publishes
+ * This proxy provides that discovery step until they do. It owns a public URL, publishes
  * RFC 9728 protected-resource metadata naming your IdP, answers a real 401
  * challenge, and forwards each request carrying a bearer token to the Gateway
  * route. The Gateway does everything else: it verifies the token, applies its
@@ -81,10 +80,9 @@ export function configFromEnv(env: Env) {
         resourceName: env.RESOURCE_NAME?.trim() || 'MCP server',
         /** Also send the token in this header, for a resource behind the Gateway that wants to see the caller. */
         forwardTokenHeader: env.FORWARD_TOKEN_HEADER?.trim().toLowerCase() || undefined,
-        // JSON only by default, because the Gateway's SSE response path sends
-        // headers and then terminates without a body. It relays this Accept to
-        // the resource, which should answer in JSON response mode. Overridable
-        // because this is the header most likely to matter if the Gateway changes.
+        // JSON only by default: JSON responses are what has been tested through
+        // the Gateway, which relays this Accept to the resource. Overridable, so
+        // streaming can be enabled with a restart rather than a rebuild.
         upstreamAccept: env.UPSTREAM_ACCEPT?.trim() || 'application/json',
         upstreamTimeoutMs
     };
@@ -237,9 +235,8 @@ export function createProxy(config: Config, { log = consoleLog, fetchImpl = fetc
         // A Gateway refusal of a token that passed the precheck is not
         // something the client can fix by signing in again: a 401 means the
         // access point does not accept this IdP's tokens, a 403 that its trust
-        // policy denied the caller. Relaying either would be harmful, because a
-        // client reads 401 as "authenticate again" and chases the Gateway's own
-        // `WWW-Authenticate`, which points at HTML. Answer with something
+        // policy denied the caller. Relaying a 401 would send the client back
+        // through a sign-in that already worked, so answer with something
         // terminal and put the detail where an operator will find it.
         if (upstream.status === 401 || upstream.status === 403) {
             const detail = await upstream.text().catch(() => '');

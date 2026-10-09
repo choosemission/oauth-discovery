@@ -169,8 +169,7 @@ describe('forwarding', () => {
     });
 
     it('turns a Gateway 401 into a terminal 502, never relaying its challenge', async () => {
-        // Relaying it would restart a sign-in that already worked, chasing a
-        // challenge that points at documents serving HTML.
+        // Relaying it would restart a sign-in that already worked.
         const response = await proxy(
             reply('{"detail":"unauthorized"}', { status: 401, headers: { 'www-authenticate': 'Bearer resource_metadata="/x"' } })
         ).call();
