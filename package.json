@@ -2,6 +2,7 @@
   "name": "oauth-discovery",
   "version": "0.1.0",
   "private": true,
+  "license": "Apache-2.0",
   "description": "OAuth discovery proxy for Affinidi Agent Gateway surfaces: RFC 9728 metadata, a 401 challenge, and forwarding to the access point. A workaround until surfaces support Authorization Server Discovery.",
   "repository": {
     "type": "git",
